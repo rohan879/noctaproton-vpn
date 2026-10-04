@@ -30,6 +30,7 @@ P2P = 4
 STREAMING = 8
 
 CACHE = os.path.expanduser("~/.cache/Proton/VPN/serverlist.json")
+NAMES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "countries.json")
 
 
 def labels(features):
@@ -109,9 +110,15 @@ def all_cities(data):
             }
         else:
             entry["count"] += 1
+    try:
+        with open(NAMES, "r") as fh:
+            names = json.load(fh)
+    except (OSError, ValueError):
+        names = {}
     rows = sorted(out.values(), key=lambda r: (r["code"], r["city"]))
     for r in rows:
         del r["score"]
+        r["country"] = names.get(r["code"], r["code"])
     return rows
 
 

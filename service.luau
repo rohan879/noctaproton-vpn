@@ -185,16 +185,24 @@ local function loadServersAndCities()
                 code = cc,
                 name = item.country or cc,
                 count = 0,
+                servers = 0,
                 load = item.load or 50,
                 cities = {},
               }
             end
             countriesMap[cc].count += 1
-            table.insert(countriesMap[cc].cities, item.city)
+            countriesMap[cc].servers += tonumber(item.count) or 0
+            table.insert(countriesMap[cc].cities, {
+              city = item.city,
+              server = item.name,
+              load = item.load,
+              count = item.count,
+            })
           end
         end
         local list = {}
         for _, c in pairs(countriesMap) do
+          table.sort(c.cities, function(a, b) return (a.load or 100) < (b.load or 100) end)
           table.insert(list, c)
         end
         table.sort(list, function(a, b) return a.count > b.count end)

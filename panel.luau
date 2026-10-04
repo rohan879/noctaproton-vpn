@@ -28,6 +28,7 @@ local snapshot = noctalia.state.get(STATE_KEY) or {
 
 local activeTab = "connections" -- "connections" | "protection" | "account"
 local filterText = ""
+local expanded = {}
 local selectedAppToAdd = ""
 local signinUserDraft = ""
 
@@ -119,7 +120,7 @@ local function renderConnectionsTab()
     ui.input({
       key = "country-search",
       value = filterText,
-      placeholder = "Search country (e.g. US, Germany)...",
+      placeholder = "Search country, code or city...",
       flexGrow = 1,
       controlSize = "sm",
       onChange = "onSearchChange",
@@ -141,61 +142,151 @@ local function renderConnectionsTab()
   local listItems = {}
   local query = noctalia.string.trim(filterText):lower()
 
-  for _, c in ipairs(countryList) do
+  local matches = {}
+  for i, c in ipairs(countryList) do
     local code = tostring(c.code or "")
     local name = tostring(c.name or code)
-    local match = (query == "") or name:lower():find(query, 1, true) or code:lower():find(query, 1, true)
+    local cities = {}
+    for _, city in ipairs(c.cities or {}) do
+      if type(city) == "table" and city.server then
+        table.insert(cities, city)
+      end
+    end
+    local rank = nil
+    local cityHits = {}
+    if query == "" or code:lower() == query then
+      rank = 0
+    elseif name:lower():sub(1, #query) == query then
+      rank = 1
+    elseif name:lower():find(query, 1, true) then
+      rank = 2
+    elseif #query >= 3 then
+      for _, city in ipairs(cities) do
+        if tostring(city.city or ""):lower():find(query, 1, true) then
+          table.insert(cityHits, city)
+        end
+      end
+      if #cityHits > 0 then
+        rank = 3
+      end
+    end
+    if rank then
+      table.insert(matches, {
+        c = c, code = code, name = name, rank = rank, index = i,
+        cities = if #cityHits > 0 then cityHits else cities,
+        cityMatch = #cityHits > 0,
+      })
+    end
+  end
+  table.sort(matches, function(a, b)
+    if a.rank ~= b.rank then return a.rank < b.rank end
+    return a.index < b.index
+  end)
 
-    if match then
-      local isCurrentCountry = snapshot.connected and (snapshot.country:upper() == code:upper())
+  for _, m in ipairs(matches) do
+    local c, code, name, cities, cityMatch = m.c, m.code, m.name, m.cities, m.cityMatch
+    local isCurrentCountry = snapshot.connected and (snapshot.country:upper() == code:upper())
+    local isExpanded = expanded[code] or cityMatch
 
-      table.insert(listItems, ui.row({
-        key = `country-{code}`,
+    table.insert(listItems, ui.row({
+      key = `country-{code}`,
+      align = "center",
+      gap = 12,
+      paddingV = 6,
+      paddingH = 8,
+      radius = 8,
+      fill = isCurrentCountry and "primary/0.15" or "surface_variant/0.3",
+    }, {
+      ui.row({
+        width = 34,
+        height = 24,
+        radius = 4,
+        fill = isCurrentCountry and "primary" or "surface_variant",
         align = "center",
-        paddingV = 6,
-        paddingH = 8,
-        radius = 8,
-        fill = isCurrentCountry and "primary/0.15" or "surface_variant/0.3",
+        justify = "center",
       }, {
-        ui.row({
-          width = 34,
-          height = 24,
-          radius = 4,
-          fill = isCurrentCountry and "primary" or "surface_variant",
+        ui.label({
+          text = code,
+          fontSize = 11,
+          fontWeight = "bold",
+          color = isCurrentCountry and "on_primary" or "on_surface_variant",
+        }),
+      }),
+      ui.column({ flexGrow = 1, gap = 2 }, {
+        ui.label({
+          text = name,
+          fontSize = 13,
+          fontWeight = isCurrentCountry and "bold" or "normal",
+          color = isCurrentCountry and "primary" or "on_surface",
+        }),
+        ui.label({
+          text = if c.servers and c.servers > 0
+            then `{c.count or 0} {if c.count == 1 then "city" else "cities"}  ·  {c.servers} {if c.servers == 1 then "server" else "servers"}`
+            else `{c.count or 0} servers  ·  {c.load or 50}% load`,
+          fontSize = 11,
+          color = "on_surface_variant",
+        }),
+      }),
+      ui.button({
+        glyph = isExpanded and "chevron-up" or "chevron-down",
+        variant = "ghost",
+        controlSize = "sm",
+        visible = #cities > 0,
+        onClick = function()
+          expanded[code] = not expanded[code]
+          render()
+        end,
+      }),
+      ui.button({
+        text = isCurrentCountry and noctalia.tr("status.connected") or noctalia.tr("actions.connect"),
+        variant = isCurrentCountry and "primary" or "outline",
+        glyph = isCurrentCountry and "check" or "player-play",
+        controlSize = "sm",
+        enabled = not isCurrentCountry and not snapshot.busy,
+        onClick = function()
+          sendCmd("connect", { target = code })
+        end,
+      }),
+    }))
+
+    if isExpanded then
+      for _, city in ipairs(cities) do
+        local server = tostring(city.server)
+        local isCurrentServer = snapshot.connected and snapshot.server == server
+        table.insert(listItems, ui.row({
+          key = `city-{code}-{city.city}`,
           align = "center",
-          justify = "center",
+          gap = 12,
+          paddingV = 4,
+          paddingH = 8,
+          radius = 8,
+          fill = isCurrentServer and "primary/0.15" or "surface_variant/0.15",
         }, {
-          ui.label({
-            text = code,
-            fontSize = 11,
-            fontWeight = "bold",
-            color = isCurrentCountry and "on_primary" or "on_surface_variant",
+          ui.row({ width = 34 }, {}),
+          ui.column({ flexGrow = 1, gap = 1 }, {
+            ui.label({
+              text = tostring(city.city or server),
+              fontSize = 12,
+              fontWeight = isCurrentServer and "bold" or "normal",
+              color = isCurrentServer and "primary" or "on_surface",
+            }),
+            ui.label({
+              text = `{server}  ·  {city.load or "?"}% load  ·  {city.count or 0} {if city.count == 1 then "server" else "servers"}`,
+              fontSize = 10,
+              color = "on_surface_variant",
+            }),
           }),
-        }),
-        ui.column({ flexGrow = 1, gap = 2 }, {
-          ui.label({
-            text = name,
-            fontSize = 13,
-            fontWeight = isCurrentCountry and "bold" or "normal",
-            color = isCurrentCountry and "primary" or "on_surface",
+          ui.button({
+            glyph = isCurrentServer and "check" or "player-play",
+            variant = isCurrentServer and "primary" or "ghost",
+            controlSize = "sm",
+            enabled = not isCurrentServer and not snapshot.busy,
+            onClick = function()
+              sendCmd("connect", { target = server })
+            end,
           }),
-          ui.label({
-            text = `{c.count or 0} servers  ·  {c.load or 50}% load`,
-            fontSize = 11,
-            color = "on_surface_variant",
-          }),
-        }),
-        ui.button({
-          text = isCurrentCountry and noctalia.tr("status.connected") or noctalia.tr("actions.connect"),
-          variant = isCurrentCountry and "primary" or "outline",
-          glyph = isCurrentCountry and "check" or "player-play",
-          controlSize = "sm",
-          enabled = not isCurrentCountry and not snapshot.busy,
-          onClick = function()
-            sendCmd("connect", { target = code })
-          end,
-        }),
-      }))
+        }))
+      end
     end
   end
 
